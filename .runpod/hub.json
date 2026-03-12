@@ -6,6 +6,7 @@
   "iconUrl": "https://transcribe.ivrit.ai/static/favicon.png",
   "config": {
     "runsOn": "GPU",
+    "endpointType": "LB",
     "containerDiskInGb": 20,
     "gpuIds": "AMPERE_16",
     "gpuCount": 1,

@@ -23,7 +23,8 @@ If you simply want to use our models via an API, quick deploy is avaialble via t
 ## Contents
 
 - `Dockerfile`: Used to create the Docker image for the serverless function.
-- `infer.py`: The main script that handles the transcription process, placed inside the Docker image.
+- `app.py`: FastAPI server for Load Balancer endpoints (default).
+- `infer.py`: Queue-based handler (legacy, for queue-based endpoints).
 
 ## Setting up your inference endpoint
 
@@ -34,6 +35,7 @@ If you simply want to use our models via an API, quick deploy is avaialble via t
    - You can choose the cheapest worker (16GB GPU, $0.00016/second as of August 1st, 2024).
    - Active workers can be 0, max workers is 1 or more.
    - GPUs/worker should be set to 1.
+   - **Endpoint type**: Select **Load Balancer** for direct HTTP access.
    - Container image should be set to **yairlifshitz/whisper-runpod-serverless:latest**, or your own Docker image (instruction later on how to build this).
    - Container disk should have at least 20 GB.
 5. Click Deploy.
@@ -42,9 +44,44 @@ If you simply want to use our models via an API, quick deploy is avaialble via t
 
 Once deployed on runpod.io, you can transcribe Hebrew audio either by providing a URL to transcribe (easily supports >1GB payloads, depending on Docker image's free disk space and timeout settings) or by uploading a file (up to ~5-10MB).
 
-### Using the endpoint
+### Direct HTTP API (Load Balancer endpoints)
 
-Use the ivrit python package.
+For Load Balancer endpoints, send POST requests to your custom URL:
+
+```bash
+curl -X POST "https://YOUR_ENDPOINT_ID.api.runpod.ai/transcribe" \
+  -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "ivrit-ai/whisper-large-v3-turbo-ct2",
+    "streaming": false,
+    "transcribe_args": {
+      "url": "https://example.com/audio.mp3",
+      "language": "he"
+    }
+  }'
+```
+
+**Endpoints:**
+- `GET /ping` — Health check (required by RunPod)
+- `POST /transcribe` — Transcribe audio from URL or base64 blob
+
+**Request body for `/transcribe`:**
+| Field | Required | Description |
+|-------|----------|-------------|
+| `model` | Yes | `ivrit-ai/whisper-large-v3-turbo-ct2` or `ivrit-ai/whisper-large-v3-ct2` |
+| `engine` | No | `faster-whisper` (default) or `stable-whisper` (for diarization) |
+| `streaming` | No | `false` for full result, `true` for NDJSON stream |
+| `transcribe_args.url` | Yes* | Public URL of audio/video file |
+| `transcribe_args.blob` | Yes* | Base64-encoded audio (alternative to url) |
+| `transcribe_args.language` | No | `"he"` for Hebrew |
+| `transcribe_args.diarize` | No | `true` for speaker diarization |
+
+\* Either `url` or `blob` is required.
+
+### Using the ivrit Python package (queue-based endpoints)
+
+Use the ivrit python package with queue-based endpoints.
 
 ```
 import ivrit
