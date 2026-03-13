@@ -22,9 +22,8 @@ If you simply want to use our models via an API, quick deploy is avaialble via t
 
 ## Contents
 
-- `Dockerfile`: Used to create the Docker image for the serverless function.
-- `app.py`: FastAPI server for Load Balancer endpoints (default).
-- `infer.py`: Queue-based handler (legacy, for queue-based endpoints).
+- `Dockerfile`: Docker image for the serverless function.
+- `app.py`: Minimal FastAPI server (Fireworks/OpenAI compatible).
 
 ## Setting up your inference endpoint
 
@@ -36,117 +35,38 @@ If you simply want to use our models via an API, quick deploy is avaialble via t
    - Active workers can be 0, max workers is 1 or more.
    - GPUs/worker should be set to 1.
    - **Endpoint type**: Select **Load Balancer** for direct HTTP access.
+   - **Model**: Add `ivrit-ai/whisper-large-v3-turbo-ct2` for RunPod model caching (smaller image, faster cold starts).
    - Container image should be set to **yairlifshitz/whisper-runpod-serverless:latest**, or your own Docker image (instruction later on how to build this).
    - Container disk should have at least 20 GB.
 5. Click Deploy.
 
 ## Usage
 
-Once deployed on runpod.io, you can transcribe Hebrew audio either by providing a URL to transcribe (easily supports >1GB payloads, depending on Docker image's free disk space and timeout settings) or by uploading a file (up to ~5-10MB).
+Fireworks/OpenAI compatible API. Send a multipart form with your audio file:
 
-### Direct HTTP API (Load Balancer endpoints)
+```javascript
+const formData = new FormData();
+formData.append("file", "https://example.com/audio.mp3");
 
-For Load Balancer endpoints, send POST requests to your custom URL:
+const response = await fetch("https://YOUR_ENDPOINT_ID.api.runpod.ai/transcribe", {
+  method: "POST",
+  headers: { "Authorization": "Bearer YOUR_RUNPOD_API_KEY" },
+  body: formData,
+});
+const result = await response.json();
+```
 
 ```bash
 curl -X POST "https://YOUR_ENDPOINT_ID.api.runpod.ai/transcribe" \
   -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "ivrit-ai/whisper-large-v3-turbo-ct2",
-    "streaming": false,
-    "transcribe_args": {
-      "url": "https://example.com/audio.mp3",
-      "language": "he"
-    }
-  }'
+  -F "file=https://example.com/audio.mp3"
 ```
 
 **Endpoints:**
 - `GET /ping` — Health check (required by RunPod)
-- `POST /transcribe` — Transcribe audio from URL or base64 blob
+- `POST /transcribe` — Transcribe remote audio (form field: `file` = URL)
 
-**Request body for `/transcribe`:**
-| Field | Required | Description |
-|-------|----------|-------------|
-| `model` | Yes | `ivrit-ai/whisper-large-v3-turbo-ct2` or `ivrit-ai/whisper-large-v3-ct2` |
-| `engine` | No | `faster-whisper` (default) or `stable-whisper` (for diarization) |
-| `streaming` | No | `false` for full result, `true` for NDJSON stream |
-| `transcribe_args.url` | Yes* | Public URL of audio/video file |
-| `transcribe_args.blob` | Yes* | Base64-encoded audio (alternative to url) |
-| `transcribe_args.language` | No | `"he"` for Hebrew |
-| `transcribe_args.diarize` | No | `true` for speaker diarization |
-
-\* Either `url` or `blob` is required.
-
-### Using the ivrit Python package (queue-based endpoints)
-
-Use the ivrit python package with queue-based endpoints.
-
-```
-import ivrit
-
-model = ivrit.load_model(engine="runpod", model="ivrit-ai/whisper-large-v3-turbo-ct2", api_key="<your API key>", endpoint_id="<your endpoint ID>")
-
-# Local file transcription (up to ~5MB)
-result = model.transcribe(path="<your file>", language="he")
-
-# URL-based transcription
-result = model.transcribe(url="<your URL>", language="he")
-
-# Print resulting text
-print(result['text'])
-
-# Iterate over segments
-for segment in result['segments']:
-    print(segment) 
-```
-
-Supported models are **ivrit-ai/whisper-large-v3-ct2** and **ivrit-ai/whisper-large-v3-turbo-ct2**.
-
-#### Output Options
-
-The `transcribe()` method accepts an `output_options` parameter (dictionary) to control the detail level of the output:
-
-```
-result = model.transcribe(
-    path="<your file>", 
-    language="he",
-    output_options={
-        "word_timestamps": False,  # Disable word-level timestamps
-        "extra_data": False         # Disable extra metadata
-    }
-)
-```
-
-Setting both `word_timestamps` and `extra_data` to `False` significantly reduces the output length, which is important when using non-streaming mode as it minimizes response payload size and improves performance.
-
-#### Diarization (Speaker Identification)
-
-For diarization (identifying different speakers), use the `stable-whisper` core engine:
-
-```
-import ivrit
-
-model = ivrit.load_model(
-    engine="runpod", 
-    model="ivrit-ai/whisper-large-v3-turbo-ct2", 
-    api_key="<your API key>", 
-    endpoint_id="<your endpoint ID>",
-    core_engine="stable-whisper"
-)
-
-# Transcribe with diarization enabled
-result = model.transcribe(
-    path="<your file>", 
-    language="he",
-    diarize=True
-)
-
-# Results will include speaker labels in segments
-for segment in result['segments']:
-    print(f"Speakers {segment.speakers}: {segment['text']}")
-```
+**Response:** `verbose_json` format with `text`, `language`, `duration`, `segments` (with word-level timestamps).
 
 ## Contributing
 

@@ -12,17 +12,13 @@ RUN apt update
 RUN apt install -y ffmpeg
 
 # Install python packages
-RUN pip3 install ivrit[all]==0.1.8 torch==2.4.1 huggingface-hub==0.36.0 fastapi uvicorn
+# ivrit with faster-whisper only (no pyannote/speechbrain for diarization)
+RUN pip3 install "ivrit[faster-whisper]==0.1.8" torch==2.4.1 huggingface-hub==0.36.0 fastapi uvicorn
 
-RUN python3 -c 'import faster_whisper; m = faster_whisper.WhisperModel("ivrit-ai/whisper-large-v3-turbo-ct2")'
-RUN python3 -c 'import faster_whisper; m = faster_whisper.WhisperModel("ivrit-ai/yi-whisper-large-v3-turbo-ct2")'
-RUN python3 -c 'import faster_whisper; m = faster_whisper.WhisperModel("large-v3-turbo")'
-RUN python3 -c 'import pyannote.audio; p = pyannote.audio.Pipeline.from_pretrained("ivrit-ai/pyannote-speaker-diarization-3.1")'
-RUN python3 -c 'from speechbrain.inference.speaker import EncoderClassifier; EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb")'
+# Models are loaded from RunPod model cache (configure ivrit-ai/whisper-large-v3-turbo-ct2 in endpoint settings)
+# No model pre-download - keeps image small for faster container startup
 
-# Add application files
 ADD app.py .
-ADD infer.py .
 
 # Expose port for Load Balancer
 EXPOSE 80

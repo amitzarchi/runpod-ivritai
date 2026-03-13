@@ -1,152 +1,97 @@
 """
-FastAPI server for ivrit.ai speech-to-text.
-Designed for RunPod Load Balancer endpoints.
+Minimal ivrit.ai speech-to-text API.
+POST /transcribe with form field: file (URL to remote audio).
+Returns verbose_json with word and segment timestamps.
 """
-import dataclasses
-import types
 import os
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Form, HTTPException
 
 import ivrit
 
-# Maximum size for grouped arrays (in characters)
-MAX_SEGMENT_GROUP_SIZE = 500000
-
-# Global variable to track the currently loaded model
+HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
+MODEL_ID = "ivrit-ai/whisper-large-v3-turbo-ct2"
 current_model = None
 
-app = FastAPI(title="ivrit.ai Speech-to-Text API")
+app = FastAPI(title="ivrit.ai Whisper API")
 
 
-# --- Request/Response models ---
-class TranscribeArgs(BaseModel):
-    url: str | None = None
-    blob: str | None = None  # base64-encoded audio
-    language: str = "he"
-    diarize: bool = False
-    verbose: bool = False
+def resolve_cached_model_path(model_id: str) -> str | None:
+    if "/" not in model_id:
+        return None
+    org, name = model_id.split("/", 1)
+    model_root = os.path.join(HF_CACHE_ROOT, f"models--{org}--{name}")
+    snapshots_dir = os.path.join(model_root, "snapshots")
+    if not os.path.isdir(snapshots_dir):
+        return None
+    refs_main = os.path.join(model_root, "refs", "main")
+    if os.path.isfile(refs_main):
+        with open(refs_main) as f:
+            h = f.read().strip()
+        path = os.path.join(snapshots_dir, h)
+        if os.path.isdir(path):
+            return path
+    versions = [d for d in os.listdir(snapshots_dir) if os.path.isdir(os.path.join(snapshots_dir, d))]
+    return os.path.join(snapshots_dir, sorted(versions)[-1]) if versions else None
 
-    class Config:
-        extra = "allow"  # Allow extra fields passed to ivrit.transcribe()
 
-
-class TranscribeRequest(BaseModel):
-    model: str = Field(..., description="Model name, e.g. ivrit-ai/whisper-large-v3-turbo-ct2")
-    engine: str = Field(default="faster-whisper", description="faster-whisper or stable-whisper")
-    streaming: bool = Field(default=False, description="Stream results incrementally")
-    transcribe_args: TranscribeArgs = Field(..., description="Transcription parameters")
-
-
-def transcribe_core(engine: str, model_name: str, transcribe_args: dict):
-    """Core transcription logic - yields segment groups."""
+def load_model():
     global current_model
-
-    different_model = (
-        not current_model
-        or current_model.engine != engine
-        or current_model.model != model_name
-    )
-
-    if different_model:
-        print(f"Loading new model: {engine} with {model_name}")
-        current_model = ivrit.load_model(
-            engine=engine, model=model_name, local_files_only=True
-        )
+    if current_model is not None:
+        return current_model
+    path = resolve_cached_model_path(MODEL_ID)
+    if path:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            current_model = ivrit.load_model(engine="faster-whisper", model=path, local_files_only=True)
+        finally:
+            os.environ.pop("HF_HUB_OFFLINE", None)
     else:
-        print(f"Reusing existing model: {engine} with {model_name}")
+        current_model = ivrit.load_model(engine="faster-whisper", model=MODEL_ID, local_files_only=True)
+    return current_model
 
-    args = transcribe_args.copy()
-    diarize = args.get("diarize", False)
-
-    if diarize:
-        res = current_model.transcribe(**args)
-        segs = res["segments"]
-    else:
-        args["stream"] = True
-        segs = current_model.transcribe(**args)
-
-    if isinstance(segs, types.GeneratorType):
-        for s in segs:
-            yield [dataclasses.asdict(s)]
-    else:
-        current_group = []
-        current_size = 0
-
-        for s in segs:
-            seg_dict = dataclasses.asdict(s)
-            seg_size = len(str(seg_dict))
-
-            if current_group and (current_size + seg_size > MAX_SEGMENT_GROUP_SIZE):
-                yield current_group
-                current_group = []
-                current_size = 0
-
-            current_group.append(seg_dict)
-            current_size += seg_size
-
-        if current_group:
-            yield current_group
-
-
-# --- Endpoints ---
 
 @app.get("/ping")
 async def health_check():
-    """Health check - required by RunPod Load Balancer."""
     return {"status": "healthy"}
 
 
 @app.post("/transcribe")
-async def transcribe(request: TranscribeRequest):
-    """
-    Transcribe audio from URL or base64 blob.
-    """
-    if request.engine not in ("faster-whisper", "stable-whisper"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"engine must be 'faster-whisper' or 'stable-whisper', got '{request.engine}'",
-        )
-
-    args = request.transcribe_args.model_dump(exclude_none=True)
-    if not args.get("url") and not args.get("blob"):
-        raise HTTPException(
-            status_code=400,
-            detail="transcribe_args must contain either 'url' or 'blob'",
-        )
-
-    try:
-        stream_gen = transcribe_core(
-            request.engine, request.model, args
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    if request.streaming:
-        from fastapi.responses import StreamingResponse
-        import json
-
-        async def generate():
-            for group in stream_gen:
-                yield json.dumps(group) + "\n"
-
-        return StreamingResponse(
-            generate(),
-            media_type="application/x-ndjson",
-        )
-
-    # Non-streaming: collect all segments
-    result = []
-    for group in stream_gen:
-        result.extend(group)
-
-    return {"result": result}
+async def transcribe(file: str = Form()):
+    """file: URL to remote audio (e.g. https://example.com/audio.mp3)"""
+    if not file or not file.startswith(("http://", "https://")):
+        raise HTTPException(400, "file must be a URL (http:// or https://)")
+    model_obj = load_model()
+    result = model_obj.transcribe(
+        url=file,
+        language="he",
+        stream=False,
+        word_timestamps=True,
+    )
+    segments = result["segments"]
+    text = " ".join(s.text for s in segments)
+    duration = segments[-1].end if segments else 0.0
+    out_segments = []
+    for i, s in enumerate(segments):
+        seg = {"id": i, "start": s.start, "end": s.end, "text": s.text}
+        words = None
+        if hasattr(s, "words") and s.words:
+            words = [{"word": w.word, "start": w.start, "end": w.end} for w in s.words]
+        elif getattr(s, "extra_data", None):
+            words = [{"word": w["word"], "start": w["start"], "end": w["end"]} for w in (s.extra_data.get("words") or [])]
+        if words:
+            seg["words"] = words
+        out_segments.append(seg)
+    return {
+        "text": text,
+        "language": "he",
+        "duration": duration,
+        "task": "transcribe",
+        "segments": out_segments,
+    }
 
 
 if __name__ == "__main__":
     import uvicorn
-
     port = int(os.getenv("PORT", "80"))
-    print(f"Starting server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
