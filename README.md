@@ -42,16 +42,16 @@ If you simply want to use our models via an API, quick deploy is avaialble via t
 
 ## Usage
 
-Fireworks/OpenAI compatible API. Send a multipart form with your audio file:
+Send a JSON body with the audio URL:
 
 ```javascript
-const formData = new FormData();
-formData.append("file", "https://example.com/audio.mp3");
-
 const response = await fetch("https://YOUR_ENDPOINT_ID.api.runpod.ai/transcribe", {
   method: "POST",
-  headers: { "Authorization": "Bearer YOUR_RUNPOD_API_KEY" },
-  body: formData,
+  headers: {
+    "Authorization": "Bearer YOUR_RUNPOD_API_KEY",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ file: "https://example.com/audio.mp3" }),
 });
 const result = await response.json();
 ```
@@ -59,12 +59,13 @@ const result = await response.json();
 ```bash
 curl -X POST "https://YOUR_ENDPOINT_ID.api.runpod.ai/transcribe" \
   -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
-  -F "file=https://example.com/audio.mp3"
+  -H "Content-Type: application/json" \
+  -d '{"file":"https://example.com/audio.mp3"}'
 ```
 
 **Endpoints:**
 - `GET /ping` — Health check (required by RunPod)
-- `POST /transcribe` — Transcribe remote audio (form field: `file` = URL)
+- `POST /transcribe` — Transcribe remote audio (JSON body: `{"file": "URL"}`)
 
 **Response:** `verbose_json` format with `text`, `language`, `duration`, `segments` (with word-level timestamps).
 

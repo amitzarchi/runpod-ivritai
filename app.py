@@ -1,13 +1,18 @@
 """
 Minimal ivrit.ai speech-to-text API.
-POST /transcribe with form field: file (URL to remote audio).
+POST /transcribe with JSON body: {"file": "https://..."}.
 Returns verbose_json with word and segment timestamps.
 """
 import os
 
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 import ivrit
+
+
+class TranscribeRequest(BaseModel):
+    file: str  # URL to remote audio
 
 HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
 MODEL_ID = "ivrit-ai/whisper-large-v3-turbo-ct2"
@@ -57,8 +62,9 @@ async def health_check():
 
 
 @app.post("/transcribe")
-async def transcribe(file: str = Form()):
+async def transcribe(request: TranscribeRequest):
     """file: URL to remote audio (e.g. https://example.com/audio.mp3)"""
+    file = request.file
     if not file or not file.startswith(("http://", "https://")):
         raise HTTPException(400, "file must be a URL (http:// or https://)")
     model_obj = load_model()
